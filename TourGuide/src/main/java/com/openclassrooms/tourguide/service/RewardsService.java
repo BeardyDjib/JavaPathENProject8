@@ -23,9 +23,9 @@ import com.openclassrooms.tourguide.user.UserReward;
 /**
  * Ce service calcule les récompenses pour un utilisateur.
  *
- * Il regarde où l'utilisateur est allé récemment,
- * puis vérifie s'il était près d'une attraction.
- * Si oui, il demande à RewardCentral combien de points donner.
+ * Il regarde toutes les positions où l'utilisateur est allé,
+ * puis vérifie pour chaque attraction si l'utilisateur est déjà passé à proximité.
+ * Si oui, il demande à RewardCentral combien de points donner et crée une récompense.
  *
  * Pour aller plus vite quand il y a beaucoup d'utilisateurs :
  * - on utilise des CompletableFuture pour lancer plusieurs calculs en parallèle ;
@@ -124,12 +124,16 @@ public class RewardsService {
 	/**
 	 * Calcule les récompenses pour un utilisateur.
 	 *
+	 * Règle métier :
+	 * - on regarde toutes les positions déjà visitées par l'utilisateur ;
+	 * - pour chaque attraction, si l'utilisateur est passé à proximité et qu'il
+	 *   n'a pas encore été récompensé pour cette attraction, on crée une récompense.
+	 *
 	 * Optimisations :
-	 * 1. On ne regarde que la DERNIÈRE position visitée (pas tout l'historique).
-	 * 2. On prépare un Set des attractions déjà récompensées pour aller plus vite.
-	 * 3. Pour chaque attraction proche et pas encore récompensée :
-	 *    - on lance le calcul des points en parallèle (max 100 en même temps grâce au sémaphore).
-	 * 4. On attend que tous les calculs soient terminés.
+	 * - on utilise un Set pour mémoriser les attractions déjà récompensées (plus rapide
+	 *   que de parcourir la liste à chaque fois) ;
+	 * - on lance les appels à RewardCentral en parallèle via CompletableFuture ;
+	 * - on limite le nombre d'appels simultanés grâce au sémaphore.
 	 *
 	 * @param user l'utilisateur pour lequel calculer les récompenses
 	 */
@@ -141,42 +145,45 @@ public class RewardsService {
 			return;
 		}
 
-		// 1) On prend uniquement la dernière position visitée
-		VisitedLocation lastVisitedLocation = user.getLastVisitedLocation();
-
-		// 2) On récupère la liste des attractions
+		// Liste des attractions disponibles
 		List<Attraction> attractions = gpsUtil.getAttractions();
 
-		// 3) On prépare un Set des attractions déjà récompensées pour cet utilisateur
+		// Attractions déjà récompensées pour cet utilisateur
 		Set<String> rewardedAttractions = user.getUserRewards().stream()
 				.map(r -> r.attraction.attractionName)
 				.collect(Collectors.toSet());
 
 		List<CompletableFuture<Void>> futures = new ArrayList<>();
 
-		for (Attraction attraction : attractions) {
+		// On parcourt TOUTES les positions visitées par l'utilisateur
+		for (VisitedLocation visitedLocation : userLocations) {
+			for (Attraction attraction : attractions) {
 
-			// Déjà récompensé pour cette attraction ? → on passe
-			if (rewardedAttractions.contains(attraction.attractionName)) {
-				continue;
+				// Si l'utilisateur a déjà une récompense pour cette attraction → on passe
+				if (rewardedAttractions.contains(attraction.attractionName)) {
+					continue;
+				}
+
+				// Si la position n'est pas assez proche de l'attraction → on passe
+				if (!nearAttraction(visitedLocation, attraction)) {
+					continue;
+				}
+
+				// On marque cette attraction comme "déjà prise en compte"
+				rewardedAttractions.add(attraction.attractionName);
+
+				// On lance le calcul des points en parallèle (limité par le sémaphore)
+				CompletableFuture<Void> future = getRewardPointsAsync(attraction, user)
+						.thenAccept(points -> {
+							// Quand les points sont calculés, on ajoute la récompense à l'utilisateur
+							user.addUserReward(new UserReward(visitedLocation, attraction, points));
+						});
+
+				futures.add(future);
 			}
-
-			// Pas assez proche ? → on passe
-			if (!nearAttraction(lastVisitedLocation, attraction)) {
-				continue;
-			}
-
-			// On lance le calcul des points en parallèle (max 100 en même temps via le sémaphore)
-			CompletableFuture<Void> future = getRewardPointsAsync(attraction, user)
-					.thenAccept(points -> {
-						// Quand les points sont calculés, on ajoute la récompense à l'utilisateur
-						user.addUserReward(new UserReward(lastVisitedLocation, attraction, points));
-					});
-
-			futures.add(future);
 		}
 
-		// 4) On attend que TOUTES les récompenses soient calculées
+		// On attend que TOUTES les récompenses soient calculées
 		if (!futures.isEmpty()) {
 			CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
 		}
