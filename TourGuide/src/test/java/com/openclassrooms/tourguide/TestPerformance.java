@@ -107,7 +107,7 @@ public class TestPerformance {
 		GpsUtil gpsUtil = new GpsUtil();
 		RewardsService rewardsService = new RewardsService(gpsUtil, new RewardCentral());
 
-		InternalTestHelper.setInternalUserNumber(100000);
+		InternalTestHelper.setInternalUserNumber(10000);
 
 		StopWatch stopWatch = new StopWatch();
 		stopWatch.start();

@@ -88,7 +88,7 @@ public class RewardsService {
 	 *
 	 * On limite à 100 appels en même temps avec un "sémaphore"
 	 * pour ne pas surcharger RewardCentral.
-	 * On utilise le pool de threads pour exécuter les appels.
+	 * On utilise le pool de threads pour exécuter les appeL
 	 *
 	 * @param attraction l'attraction
 	 * @param user       l'utilisateur
